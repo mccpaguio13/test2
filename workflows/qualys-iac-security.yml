@@ -1,0 +1,134 @@
+name: Qualys IaC Security Scan
+
+# Trigger conditions
+on:
+  # Scan on pull requests to main branch
+  pull_request:
+    branches: 
+      - main
+      - develop
+    paths:
+      - '**.tf'
+      - '**.json'
+      - '**.yaml'
+      - '**.yml'
+      - '**.template'
+      
+  # Scan on push to main branch
+  push:
+    branches:
+      - main
+    paths:
+      - '**.tf'
+      - '**.json'
+      - '**.yaml'
+      - '**.yml'
+      - '**.template'
+      
+  # Manual trigger option
+  workflow_dispatch:
+    inputs:
+      scan_directory:
+        description: 'Directory to scan (leave empty for full repo)'
+        required: false
+        default: ''
+        type: string
+      
+  # Scheduled daily scan
+  schedule:
+    - cron: '0 8 * * 1-5'  # 8 AM weekdays
+
+# Define jobs
+jobs:
+  qualys_iac_scan:
+    runs-on: ubuntu-latest
+    name: Qualys IaC Security Assessment
+    
+    # Set timeout to prevent hanging workflows
+    timeout-minutes: 30
+    
+    steps:
+      # Checkout repository code
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for comprehensive analysis
+          
+      # Display scan context
+      - name: Display Scan Information
+        run: |
+          echo "🔍 Starting Qualys IaC Security Scan"
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Trigger: ${{ github.event_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Target Directory: ${{ github.event.inputs.scan_directory || 'Full Repository' }}"
+          fi
+          echo "Scan Time: $(date)"
+          
+      # Count IaC files to scan
+      - name: Inventory IaC Files
+        run: |
+          echo "📊 IaC Files Inventory:"
+          echo "Terraform files (.tf): $(find . -name '*.tf' | wc -l)"
+          echo "JSON files (.json): $(find . -name '*.json' | wc -l)"
+          echo "YAML files (.yaml/.yml): $(find . -name '*.yaml' -o -name '*.yml' | wc -l)"
+          echo "Template files (.template): $(find . -name '*.template' | wc -l)"
+          echo ""
+          echo "📂 Directory Structure:"
+          find . -name '*.tf' -o -name '*.json' -o -name '*.yaml' -o -name '*.yml' -o -name '*.template' | head -20
+          
+      # Run Qualys IaC Security Scan
+      - name: Execute Qualys IaC Scan
+        id: qualys_scan
+        uses: Qualys/github_action_qiac@main
+        env:
+          URL: ${{ secrets.QUALYS_URL }}
+          UNAME: ${{ secrets.QUALYS_USERNAME }}
+          PASS: ${{ secrets.QUALYS_PASSWORD }}
+        with:
+          # Use input directory if provided, otherwise scan all
+          directory: ${{ github.event.inputs.scan_directory }}
+          
+      # Handle scan results
+      - name: Process Scan Results
+        if: always()  # Run even if scan fails
+        run: |
+          if [ "${{ steps.qualys_scan.outcome }}" = "success" ]; then
+            echo "✅ Qualys IaC scan completed successfully"
+            echo "📋 Check the Actions summary and Qualys TotalCloud console for detailed results"
+          else
+            echo "❌ Qualys IaC scan encountered issues"
+            echo "🔧 Please review scan logs and Qualys connectivity"
+          fi
+          
+      # Create scan summary for PR comments
+      - name: Generate Scan Summary
+        if: github.event_name == 'pull_request'
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## 🔒 Qualys IaC Security Scan Results
+          
+          **Repository:** ${{ github.repository }}  
+          **Branch:** ${{ github.head_ref }}  
+          **Scan Status:** ${{ steps.qualys_scan.outcome }}  
+          **Timestamp:** $(date)
+          
+          ### 📊 Next Steps:
+          1. Review detailed findings in [Qualys TotalCloud Console](${{ secrets.QUALYS_URL }})
+          2. Navigate to **Monitor** → **IaC Posture** tab
+          3. Filter results by repository: `${{ github.repository }}`
+          4. Address any **Critical** or **High** severity findings
+          
+          ### 📍 Where to Find Results:
+          - **GitHub Actions**: Check pipeline annotations above
+          - **Qualys Console**: Monitor → IaC Posture → Advanced Search
+          - **Reports**: Generate custom reports in TotalCloud
+          EOF
+
+# Workflow permissions
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
